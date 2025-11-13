@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>rats - Data Analysis</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="toolbar">
+        <div class="toolbar-section">
+          <h1>rats</h1>
+        </div>
+        <div class="toolbar-section">
+          <button id="import-btn" class="btn btn-primary">Import File</button>
+          <button id="reset-btn" class="btn" disabled title="Reset to original dataset">↻ Reset</button>
+          <button id="sort-btn" class="btn" disabled>Sort Rows</button>
+          <button id="filter-btn" class="btn" disabled>Filter Data</button>
+          <div class="dropdown">
+            <button id="stats-btn" class="btn" disabled>
+              Statistics ▼
+            </button>
+            <div id="stats-dropdown" class="dropdown-content">
+              <a href="#" data-action="all-stats">📊 All Statistics</a>
+              <div class="dropdown-divider"></div>
+              <a href="#" data-action="sum">Σ SUM</a>
+              <a href="#" data-action="avg">μ AVERAGE</a>
+              <a href="#" data-action="count"># COUNT</a>
+              <a href="#" data-action="min">↓ MIN</a>
+              <a href="#" data-action="max">↑ MAX</a>
+              <a href="#" data-action="median">M MEDIAN</a>
+              <a href="#" data-action="stdev">σ STDEV</a>
+              <a href="#" data-action="correlation">⚡ CORRELATION</a>
+            </div>
+          </div>
+          <button id="export-btn" class="btn" disabled>Export</button>
+        </div>
+      </div>
+
+      <div class="status-bar" id="status-bar">
+        <span id="status-text">No file loaded</span>
+        <span id="row-count"></span>
+      </div>
+
+      <div class="main-content">
+        <div class="grid-container" id="grid-container">
+          <div class="empty-state">
+            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+            </svg>
+            <h2>No Data Loaded</h2>
+            <p>Click "Import File" to load a CSV or Excel file</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Import Dialog -->
+    <div id="import-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Import Preview</h2>
+          <button class="close-btn" id="close-preview">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="preview-container"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-import" class="btn">Cancel</button>
+          <button id="confirm-import" class="btn btn-primary">Import</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sort Dialog -->
+    <div id="sort-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Sort Data</h2>
+          <button class="close-btn" id="close-sort">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="sort-column">Sort by column:</label>
+            <select id="sort-column" class="form-control">
+              <option value="">Select column...</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="radio" name="sort-direction" value="asc" checked />
+              Ascending (A → Z, 0 → 9)
+            </label>
+            <label>
+              <input type="radio" name="sort-direction" value="desc" />
+              Descending (Z → A, 9 → 0)
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-sort" class="btn">Cancel</button>
+          <button id="confirm-sort" class="btn btn-primary">Apply Sort</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Statistics Dialog -->
+    <div id="stats-dialog" class="modal">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2>Table Statistics</h2>
+          <button class="close-btn" id="close-stats">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="stats-container"></div>
+        </div>
+        <div class="modal-footer">
+          <button id="close-stats-btn" class="btn">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Export Dialog -->
+    <div id="export-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2>Export Data</h2>
+          <button class="close-btn" id="close-export">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="export-format">Export Format:</label>
+            <select id="export-format" class="form-control">
+              <option value="csv">CSV</option>
+              <option value="excel">Excel (XLSX)</option>
+            </select>
+          </div>
+          <div class="form-group" id="excel-options" style="display: none;">
+            <label for="sheet-name">Sheet Name:</label>
+            <input type="text" id="sheet-name" class="form-control" value="Data" />
+          </div>
+          <div class="form-group">
+            <label>
+              <input type="checkbox" id="include-header" checked />
+              Include column headers
+            </label>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-export" class="btn">Cancel</button>
+          <button id="confirm-export" class="btn btn-primary">Export</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Filter Dialog -->
+    <div id="filter-dialog" class="modal">
+      <div class="modal-content modal-large">
+        <div class="modal-header">
+          <h2>Filter Data</h2>
+          <button class="close-btn" id="close-filter">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div id="filter-rules-container">
+            <!-- Filter rules will be added here dynamically -->
+          </div>
+          <button id="add-filter-rule" class="btn">Add Filter Rule</button>
+        </div>
+        <div class="modal-footer">
+          <button id="clear-filters" class="btn">Clear All</button>
+          <button id="cancel-filter" class="btn">Cancel</button>
+          <button id="apply-filter" class="btn btn-primary">Apply Filter</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Function Dialog (for individual statistics) -->
+    <div id="function-dialog" class="modal">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h2 id="function-dialog-title">Calculate Function</h2>
+          <button class="close-btn" id="close-function">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div class="form-group">
+            <label for="function-column">Select Column:</label>
+            <select id="function-column" class="form-control">
+              <option value="">Select column...</option>
+            </select>
+          </div>
+          <div class="form-group" id="function-column2-group" style="display: none;">
+            <label for="function-column2">Select Second Column (for correlation):</label>
+            <select id="function-column2" class="form-control">
+              <option value="">Select column...</option>
+            </select>
+          </div>
+          <div id="function-result" class="function-result" style="display: none;">
+            <h3>Result:</h3>
+            <div id="function-result-value"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="cancel-function" class="btn">Cancel</button>
+          <button id="calculate-function" class="btn btn-primary">Calculate</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
