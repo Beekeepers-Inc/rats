@@ -21,6 +21,7 @@ fn main() {
             // Query
             duckdb_core::query_data,
             duckdb_core::get_table_info,
+            duckdb_core::drop_table,
             // Editor
             editor::reorder_rows,
             // Statistics

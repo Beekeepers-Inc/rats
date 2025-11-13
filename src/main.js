@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { listen } from '@tauri-apps/api/event';
+import { VirtualScroller } from './virtualScroll.js';
 
 // Application state
 let currentTable = null;
@@ -20,12 +21,23 @@ let loadedRowCount = 0; // Track how many rows we've actually loaded
 let scrollObserver = null; // Intersection Observer for infinite scroll
 let sentinelElement = null; // Sentinel element to observe
 
+// Virtual scrolling state
+let virtualScrollEnabled = true; // Enable virtual scrolling for large datasets
+let rowHeight = 32; // Approximate height of each row in pixels
+let visibleRowCount = 50; // Number of rows to render at once
+let currentScrollTop = 0; // Current scroll position
+let totalRows = 0; // Total number of rows in dataset
+let startRowIndex = 0; // Index of first visible row
+let virtualScrollContainer = null; // Container for virtual scrolling
+
 // DOM elements
 const importBtn = document.getElementById('import-btn');
 const resetBtn = document.getElementById('reset-btn');
 const sortBtn = document.getElementById('sort-btn');
 const filterBtn = document.getElementById('filter-btn');
 const statsBtn = document.getElementById('stats-btn');
+const saveBtn = document.getElementById('save-btn');
+const saveAsBtn = document.getElementById('save-as-btn');
 const exportBtn = document.getElementById('export-btn');
 const gridContainer = document.getElementById('grid-container');
 const statusText = document.getElementById('status-text');
@@ -95,6 +107,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setupLoadingUI();
   setupProgressListener();
   setupInfiniteScroll();
+  // Don't restore from storage - DuckDB is in-memory and won't persist
+  // restoreTableFromStorage();
 });
 
 function setupLoadingUI() {
@@ -115,9 +129,24 @@ function setupLoadingUI() {
   loadingProgress = document.getElementById('loading-progress');
 }
 
+let importStartTime = null;
+let elapsedTimeTimer = null;
+
 async function setupProgressListener() {
   await listen('import-progress', (event) => {
     const progress = event.payload;
+
+    // Track import start time
+    if (progress.status.includes('Starting import')) {
+      importStartTime = Date.now();
+      startElapsedTimeUpdater();
+    }
+
+    // Clear timer when import completes
+    if (progress.status.includes('Import complete')) {
+      stopElapsedTimeUpdater();
+    }
+
     if (loadingStatus) {
       loadingStatus.textContent = progress.status;
     }
@@ -125,6 +154,34 @@ async function setupProgressListener() {
       loadingProgress.textContent = `${progress.rows_imported.toLocaleString()} rows imported`;
     }
   });
+}
+
+function startElapsedTimeUpdater() {
+  stopElapsedTimeUpdater(); // Clear any existing timer
+
+  elapsedTimeTimer = setInterval(() => {
+    if (importStartTime && loadingProgress) {
+      const elapsed = Math.floor((Date.now() - importStartTime) / 1000);
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      const timeStr = minutes > 0
+        ? `${minutes}m ${seconds}s elapsed`
+        : `${seconds}s elapsed`;
+
+      // Only update if we're still showing the loading overlay
+      if (loadingOverlay && loadingOverlay.style.display !== 'none') {
+        loadingProgress.textContent = `${timeStr} - Processing large file...`;
+      }
+    }
+  }, 1000); // Update every second
+}
+
+function stopElapsedTimeUpdater() {
+  if (elapsedTimeTimer) {
+    clearInterval(elapsedTimeTimer);
+    elapsedTimeTimer = null;
+  }
+  importStartTime = null;
 }
 
 function showLoading(message = 'Loading...') {
@@ -140,6 +197,7 @@ function showLoading(message = 'Loading...') {
 }
 
 function hideLoading() {
+  stopElapsedTimeUpdater(); // Stop the timer when hiding loading overlay
   if (loadingOverlay) {
     loadingOverlay.style.display = 'none';
   }
@@ -170,6 +228,10 @@ function setupEventListeners() {
   closeFunction.addEventListener('click', () => hideModal(functionDialog));
   cancelFunction.addEventListener('click', () => hideModal(functionDialog));
   calculateFunction.addEventListener('click', handleCalculateFunction);
+
+  // Save
+  saveBtn.addEventListener('click', handleSaveClick);
+  saveAsBtn.addEventListener('click', handleSaveAsClick);
 
   // Export
   exportBtn.addEventListener('click', handleExportClick);
@@ -278,25 +340,34 @@ async function handleConfirmImport() {
     hideModal(importDialog);
     showLoading('Starting import...');
 
+    // Clean up previous dataset
+    await cleanupPreviousData();
+
     const result = await invoke('import_file', {
       filePath: selectedFilePath,
       tableName: null
     });
 
     currentTable = result.table_name;
+
+    // Hide loading overlay immediately after import completes
+    // This allows the user to see the status bar updates during loadTableData
+    hideLoading();
     statusText.textContent = result.message;
 
-    // Load the data
-    showLoading('Loading data for display...');
+    // Don't save to localStorage - DuckDB is in-memory and won't persist anyway
+    // localStorage.setItem('currentTable', currentTable);
+
+    // Load the data (status updates will show in status bar)
     await loadTableData();
 
     // Enable all data operation buttons
     sortBtn.disabled = false;
     filterBtn.disabled = false;
     statsBtn.disabled = false;
+    saveBtn.disabled = false;
+    saveAsBtn.disabled = false;
     exportBtn.disabled = false;
-
-    hideLoading();
   } catch (error) {
     console.error('Import error:', error);
     hideLoading();
@@ -305,42 +376,129 @@ async function handleConfirmImport() {
   }
 }
 
-async function loadTableData(limit = 10000) {
-  try {
-    statusText.textContent = 'Loading data...';
+async function cleanupPreviousData() {
+  console.log('Cleaning up previous data...');
 
-    // Reset infinite scroll state
+  // Destroy virtual scroller
+  if (virtualScrollContainer) {
+    virtualScrollContainer.destroy();
+    virtualScrollContainer = null;
+  }
+
+  // Clear DOM
+  if (gridContainer) {
+    gridContainer.innerHTML = '';
+  }
+
+  // Clear state
+  currentData = null;
+  currentColumns = null;
+  currentTbody = null;
+  totalRows = 0;
+  loadedRowCount = 0;
+
+  // Drop old table from DuckDB if exists
+  if (currentTable) {
+    try {
+      console.log(`Dropping old table: ${currentTable}`);
+      await invoke('drop_table', { tableName: currentTable });
+    } catch (error) {
+      console.warn('Could not drop old table:', error);
+    }
+  }
+
+  console.log('Cleanup complete');
+}
+
+async function loadTableData(limit = null) {
+  try {
+    statusText.textContent = 'Analyzing dataset...';
+
+    // Reset state
     currentOffset = 0;
     loadedRowCount = 0;
-    hasMoreData = true;
+    hasMoreData = false;
     isLoadingMore = false;
 
-    const result = await invoke('query_data', {
+    // First, get total row count and columns (very fast query)
+    const initialResult = await invoke('query_data', {
       tableName: currentTable,
-      limit: limit,
+      limit: 1,
       offset: 0
     });
 
-    currentData = result;
-    currentColumns = result.columns;
+    currentColumns = initialResult.columns;
+    totalRows = initialResult.total_rows;
 
     // Store original row count if not filtered
     if (!isFiltered) {
-      originalRowCount = result.total_rows;
+      originalRowCount = totalRows;
     }
 
-    // Update scroll state
-    loadedRowCount = result.rows.length;
-    currentOffset = loadedRowCount;
-    hasMoreData = loadedRowCount < result.total_rows;
+    // Show progress information
+    statusText.textContent = `Preparing to display ${totalRows.toLocaleString()} rows...`;
+    updateRowCount(totalRows);
 
-    displayData(result);
-    updateRowCount(result.total_rows);
-    statusText.textContent = `Loaded ${currentTable}`;
+    if (virtualScrollEnabled && totalRows > 100) {
+      // Use virtual scrolling for large datasets
+      console.log(`Using virtual scrolling for ${totalRows} rows`);
+      statusText.textContent = `Loading first rows of ${totalRows.toLocaleString()}...`;
+      await loadVirtualScrollData();
+      statusText.textContent = `Ready - ${totalRows.toLocaleString()} rows (scroll to load more)`;
+    } else {
+      // Load all data for small datasets
+      console.log(`Loading all ${totalRows} rows`);
+      statusText.textContent = `Loading ${totalRows.toLocaleString()} rows...`;
+      const result = await invoke('query_data', {
+        tableName: currentTable,
+        limit: limit || 999999999,
+        offset: 0
+      });
+      currentData = result;
+      displayData(result);
+      statusText.textContent = `Loaded ${currentTable} - ${totalRows.toLocaleString()} rows`;
+    }
   } catch (error) {
     console.error('Load error:', error);
     statusText.textContent = 'Failed to load data';
-    alert('Failed to load data: ' + error);
+
+    // Don't show alert for "table does not exist" errors (expected on first launch)
+    if (!error.includes('does not exist')) {
+      alert('Failed to load data: ' + error);
+    }
+  }
+}
+
+async function restoreTableFromStorage() {
+  try {
+    const savedTable = localStorage.getItem('currentTable');
+    if (!savedTable) {
+      console.log('No saved table to restore');
+      return;
+    }
+
+    console.log('Restoring table from storage:', savedTable);
+    currentTable = savedTable;
+
+    // Load the saved table data
+    await loadTableData();
+
+    // Enable all data operation buttons
+    sortBtn.disabled = false;
+    filterBtn.disabled = false;
+    statsBtn.disabled = false;
+    saveBtn.disabled = false;
+    saveAsBtn.disabled = false;
+    exportBtn.disabled = false;
+
+    console.log('Table restored successfully');
+  } catch (error) {
+    console.warn('Table no longer exists, clearing localStorage:', error);
+    // Clear invalid saved table silently
+    localStorage.removeItem('currentTable');
+    currentTable = null;
+    statusText.textContent = 'No file loaded';
+    // Don't show alert for missing table - it's expected after restart
   }
 }
 
@@ -397,14 +555,11 @@ function displayData(data) {
   });
   table.appendChild(tbody);
 
-  // Save tbody reference for infinite scroll
+  // Save tbody reference
   currentTbody = tbody;
 
   gridContainer.innerHTML = '';
   gridContainer.appendChild(table);
-
-  // Set up sentinel for infinite scroll
-  observeSentinel();
 }
 
 function updateRowCount(count) {
@@ -412,33 +567,102 @@ function updateRowCount(count) {
 }
 
 // ============================================
+// Virtual Scrolling Functions
+// ============================================
+
+async function loadVirtualScrollData() {
+  // Destroy existing scroller
+  if (virtualScrollContainer) {
+    virtualScrollContainer.destroy();
+  }
+
+  // Show temporary loading message in grid
+  gridContainer.innerHTML = `
+    <div style="padding: 40px; text-align: center; color: #666;">
+      <div style="font-size: 18px; margin-bottom: 10px;">⏳ Preparing virtual scroll...</div>
+      <div style="font-size: 14px;">Loading first ${Math.min(100, totalRows)} rows of ${totalRows.toLocaleString()}</div>
+    </div>
+  `;
+
+  // Give the UI a moment to update
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  // Create new virtual scroller
+  virtualScrollContainer = new VirtualScroller({
+    container: gridContainer,
+    rowHeight: 32,
+    bufferSize: 20,
+    totalRows: totalRows,
+    onRenderRows: async (startIndex, count) => {
+      console.log(`Rendering rows ${startIndex} to ${startIndex + count}`);
+      return await renderVirtualRows(startIndex, count);
+    }
+  });
+
+  console.log(`Virtual scroller initialized for ${totalRows} rows`);
+}
+
+async function renderVirtualRows(startIndex, count) {
+  try {
+    // Fetch rows from backend
+    const result = await invoke('query_data', {
+      tableName: currentTable,
+      limit: count,
+      offset: startIndex
+    });
+
+    // Build table HTML
+    let html = '<table class="data-grid">';
+
+    // Header (only on first render)
+    if (startIndex === 0) {
+      html += '<thead><tr>';
+      html += '<th class="row-number">#</th>';
+      currentColumns.forEach(col => {
+        html += `<th title="Click to sort by ${col}">${col}</th>`;
+      });
+      html += '</tr></thead>';
+    }
+
+    // Body
+    html += '<tbody>';
+    result.rows.forEach((row, index) => {
+      const rowNum = startIndex + index + 1;
+      html += '<tr>';
+      html += `<td class="row-number">${rowNum}</td>`;
+      row.forEach(cell => {
+        if (cell === null || cell === undefined) {
+          html += '<td style="color: #999"></td>';
+        } else if (typeof cell === 'number') {
+          html += `<td style="text-align: right">${cell.toLocaleString()}</td>`;
+        } else {
+          html += `<td>${String(cell)}</td>`;
+        }
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+
+    return html;
+  } catch (error) {
+    console.error('Error rendering virtual rows:', error);
+    return '<div class="loading">Error loading rows...</div>';
+  }
+}
+
+//============================================
 // Infinite Scroll Functions
 // ============================================
 
 function setupInfiniteScroll() {
-  console.log('Setting up infinite scroll with Intersection Observer');
+  // Infinite scroll disabled - loading all data at once
+  console.log('Infinite scroll disabled - all data loaded at once');
 
   // Disconnect any existing observer
   if (scrollObserver) {
     scrollObserver.disconnect();
+    scrollObserver = null;
   }
-
-  // Create Intersection Observer
-  scrollObserver = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      // When sentinel becomes visible, load more data
-      if (entry.isIntersecting && hasMoreData && !isLoadingMore && currentTable) {
-        console.log('Sentinel visible - loading more data...');
-        loadMoreData();
-      }
-    });
-  }, {
-    root: null, // Use viewport
-    rootMargin: '500px', // Trigger 500px before sentinel is visible
-    threshold: 0.1
-  });
-
-  console.log('Intersection Observer created');
 }
 
 function observeSentinel() {
@@ -820,6 +1044,108 @@ function formatNumber(num) {
     return num.toFixed(2);
   }
   return String(num);
+}
+
+// ============================================
+// Save/Save As Functions
+// ============================================
+
+async function handleSaveClick() {
+  if (!currentTable || !selectedFilePath) {
+    alert('No file loaded to save');
+    return;
+  }
+
+  try {
+    showLoading('Saving changes...');
+
+    // Determine format based on file extension
+    const extension = selectedFilePath.split('.').pop().toLowerCase();
+    let result;
+
+    if (extension === 'xlsx' || extension === 'xls' || extension === 'xlsm') {
+      // Save as Excel
+      result = await invoke('export_to_excel', {
+        tableName: currentTable,
+        filePath: selectedFilePath,
+        sheetName: 'Data'
+      });
+    } else {
+      // Save as CSV
+      result = await invoke('export_to_csv', {
+        tableName: currentTable,
+        filePath: selectedFilePath,
+        includeHeader: true
+      });
+    }
+
+    hideLoading();
+    statusText.textContent = `Saved ${result.rows_exported.toLocaleString()} rows to ${result.file_path}`;
+    alert(`File saved successfully!\n${result.rows_exported.toLocaleString()} rows saved`);
+  } catch (error) {
+    console.error('Save error:', error);
+    hideLoading();
+    alert('Failed to save file: ' + error);
+  }
+}
+
+async function handleSaveAsClick() {
+  if (!currentTable) {
+    alert('No data loaded to save');
+    return;
+  }
+
+  try {
+    // Open save dialog
+    const filePath = await save({
+      defaultPath: `${currentTable}.csv`,
+      filters: [
+        {
+          name: 'CSV Files',
+          extensions: ['csv']
+        },
+        {
+          name: 'Excel Files',
+          extensions: ['xlsx']
+        }
+      ]
+    });
+
+    if (!filePath) return; // User cancelled
+
+    showLoading('Saving as new file...');
+
+    // Determine format based on file extension
+    const extension = filePath.split('.').pop().toLowerCase();
+    let result;
+
+    if (extension === 'xlsx' || extension === 'xls' || extension === 'xlsm') {
+      // Save as Excel
+      result = await invoke('export_to_excel', {
+        tableName: currentTable,
+        filePath: filePath,
+        sheetName: 'Data'
+      });
+    } else {
+      // Save as CSV
+      result = await invoke('export_to_csv', {
+        tableName: currentTable,
+        filePath: filePath,
+        includeHeader: true
+      });
+    }
+
+    // Update the selected file path to the new location
+    selectedFilePath = filePath;
+
+    hideLoading();
+    statusText.textContent = `Saved as: ${result.file_path}`;
+    alert(`File saved successfully!\n${result.rows_exported.toLocaleString()} rows saved to ${result.file_path}`);
+  } catch (error) {
+    console.error('Save As error:', error);
+    hideLoading();
+    alert('Failed to save file: ' + error);
+  }
 }
 
 // ============================================
