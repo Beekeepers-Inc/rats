@@ -71,29 +71,48 @@ fn import_csv_with_duckdb(
         ImportError::Custom("Invalid file path".to_string())
     })?;
 
-    let _ = window.emit("import-progress", ImportProgress {
-        rows_imported: 0,
-        total_rows: None,
-        status: "Reading CSV file...".to_string(),
-    });
-
-    // Use DuckDB's read_csv_auto for automatic schema inference with parallel processing
-    let query = format!(
-        "CREATE TABLE {} AS SELECT * FROM read_csv_auto('{}', header=true, sample_size=-1, parallel=true)",
-        table_name, path_str
-    );
-
-    db_conn.execute(&query, [])?;
+    println!("Starting CSV import from: {}", path_str);
+    println!("Target table: {}", table_name);
 
     let _ = window.emit("import-progress", ImportProgress {
         rows_imported: 0,
         total_rows: None,
-        status: "Analyzing data...".to_string(),
+        status: "Starting CSV import...".to_string(),
     });
 
-    // Get row count
+    // Use DuckDB's simple recommended approach - it auto-detects everything
+    // https://duckdb.org/docs/stable/data/csv/overview
+    let query = format!("CREATE TABLE {} AS FROM '{}'", table_name, path_str);
+
+    println!("Executing query: {}", query);
+
+    // Execute import - DuckDB handles schema detection, types, parallel loading automatically
+    match db_conn.execute(&query, []) {
+        Ok(_) => println!("Import query executed successfully"),
+        Err(e) => {
+            println!("Import query failed: {:?}", e);
+            return Err(ImportError::DuckDB(e));
+        }
+    }
+
+    // Get row count using DuckDB's efficient count
     let count_query = format!("SELECT COUNT(*) FROM {}", table_name);
-    let row_count: usize = db_conn.query_row(&count_query, [], |row| row.get(0))?;
+    let row_count: usize = match db_conn.query_row(&count_query, [], |row| row.get(0)) {
+        Ok(count) => {
+            println!("CSV import completed: {} rows", count);
+            count
+        },
+        Err(e) => {
+            println!("Failed to count rows: {:?}", e);
+            return Err(ImportError::DuckDB(e));
+        }
+    };
+
+    let _ = window.emit("import-progress", ImportProgress {
+        rows_imported: row_count,
+        total_rows: Some(row_count),
+        status: "Import complete!".to_string(),
+    });
 
     Ok(row_count)
 }
@@ -239,19 +258,20 @@ pub async fn import_file(
 
     let sanitized_table_name = sanitize_table_name(&table_name);
 
+    // Emit start event with clearer messaging
+    let _ = window.emit("import-progress", ImportProgress {
+        rows_imported: 0,
+        total_rows: None,
+        status: "Starting import... Large files may take 1-2 minutes".to_string(),
+    });
+
     let db = state.db.lock().map_err(|e| e.to_string())?;
     let conn = db.get_connection();
 
     // Drop table if exists
     let _ = conn.execute(&format!("DROP TABLE IF EXISTS {}", sanitized_table_name), []);
 
-    // Emit start event
-    let _ = window.emit("import-progress", ImportProgress {
-        rows_imported: 0,
-        total_rows: None,
-        status: "Starting import...".to_string(),
-    });
-
+    // Perform import (Tauri's async runtime keeps this from blocking UI)
     let rows_imported = match format.as_str() {
         "csv" => import_csv_with_duckdb(&path, &sanitized_table_name, conn, window.clone()),
         "excel" => import_excel_with_duckdb(&path, &sanitized_table_name, conn, window.clone()),

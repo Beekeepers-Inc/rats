@@ -57,6 +57,18 @@ impl DatabaseConnection {
 
         let column_count = columns.len();
 
+        // Extract table name from query to get actual total row count
+        // Assumes query is like "SELECT * FROM table_name LIMIT x OFFSET y"
+        let total_rows: usize = if let Some(table_name) = Self::extract_table_name(query) {
+            let count_query = format!("SELECT COUNT(*) FROM {}", table_name);
+            match self.conn.query_row(&count_query, [], |row| row.get(0)) {
+                Ok(count) => count,
+                Err(_) => 0, // Fallback if count fails
+            }
+        } else {
+            0 // Fallback if we can't parse table name
+        };
+
         // Now execute the actual data query
         let mut stmt = self.conn.prepare(query)?;
         let mut rows_result = stmt.query([])?;
@@ -92,13 +104,27 @@ impl DatabaseConnection {
             collected_rows.push(row_data);
         }
 
-        let total_rows = collected_rows.len();
-
         Ok(QueryResult {
             columns,
             rows: collected_rows,
             total_rows,
         })
+    }
+
+    fn extract_table_name(query: &str) -> Option<String> {
+        // Simple parser for "SELECT ... FROM table_name ..."
+        let query_upper = query.to_uppercase();
+        if let Some(from_pos) = query_upper.find(" FROM ") {
+            let after_from = &query[(from_pos + 6)..]; // " FROM " is 6 chars
+            // Take everything up to the next space, LIMIT, WHERE, ORDER, etc.
+            let table_part: String = after_from
+                .split_whitespace()
+                .next()?
+                .to_string();
+            Some(table_part)
+        } else {
+            None
+        }
     }
 
     pub fn get_table_info_internal(&self, table_name: &str) -> DuckResult<TableInfo> {
@@ -153,4 +179,19 @@ pub async fn get_table_info(
 
     db.get_table_info_internal(&table_name)
         .map_err(|e| format!("Failed to get table info: {}", e))
+}
+
+#[tauri::command(rename_all = "camelCase")]
+pub async fn drop_table(
+    state: State<'_, AppState>,
+    table_name: String,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get_connection();
+
+    let query = format!("DROP TABLE IF EXISTS {}", table_name);
+    conn.execute(&query, [])
+        .map_err(|e| format!("Failed to drop table: {}", e))?;
+
+    Ok(format!("Table {} dropped successfully", table_name))
 }

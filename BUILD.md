@@ -1,81 +1,134 @@
-# Building rats for Distribution
+# Build and CI/CD Documentation
 
-## Prerequisites
+This document explains how to build RATS locally and how the CI/CD pipeline works.
 
-- Node.js (v24+) and npm
-- Rust toolchain (1.87+)
-- Platform-specific tools:
-  - **macOS**: Xcode Command Line Tools
-  - **Windows**: Microsoft Visual C++ Build Tools
+## Table of Contents
 
-## Development Mode
+- [Local Development Build](#local-development-build)
+- [Production Build](#production-build)
+- [CI/CD Pipeline](#cicd-pipeline)
+- [Artifacts](#artifacts)
+- [Release Process](#release-process)
+- [Troubleshooting](#troubleshooting)
 
-Run the app in development mode with hot-reload:
+## Local Development Build
+
+### Prerequisites
+
+#### macOS
+```bash
+# Install Homebrew if not already installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install dependencies
+brew install duckdb node
+
+# Install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+#### Windows
+```powershell
+# Install Node.js from https://nodejs.org/
+
+# Install Rust from https://rustup.rs/
+
+# Install DuckDB
+# Download from: https://github.com/duckdb/duckdb/releases
+# Extract to C:\duckdb or similar location
+# Add to PATH and set environment variables:
+$env:DUCKDB_LIB_DIR = "C:\duckdb"
+$env:DUCKDB_INCLUDE_DIR = "C:\duckdb"
+```
+
+### Running Development Server
 
 ```bash
+# Install dependencies
+npm install
+
+# Run development server (macOS)
+RUSTFLAGS="-L /opt/homebrew/lib" npm run tauri:dev
+
+# Run development server (Windows)
 npm run tauri:dev
 ```
 
-## Building for Production
+## Production Build
 
-### Build for Current Platform
+### macOS
 
 ```bash
+# Build production app
+RUSTFLAGS="-L /opt/homebrew/lib" npm run tauri:build
+
+# Artifacts will be in:
+# - src-tauri/target/release/bundle/macos/rats.app
+# - src-tauri/target/release/bundle/dmg/rats_0.1.0_aarch64.dmg
+```
+
+### Windows
+
+```powershell
+# Ensure DuckDB environment variables are set
+$env:DUCKDB_LIB_DIR = "C:\duckdb"
+$env:DUCKDB_INCLUDE_DIR = "C:\duckdb"
+
+# Build production app
 npm run tauri:build
+
+# Artifacts will be in:
+# - src-tauri\target\release\bundle\nsis\rats_0.1.0_x64-setup.exe
 ```
 
-This will create an installer in `src-tauri/target/release/bundle/`:
-- **macOS**: `.dmg` and `.app` in `dmg/` and `macos/`
-- **Windows**: `.exe` and `.msi` in `nsis/` and `msi/`
+## CI/CD Pipeline
 
-### Build for Specific Platform
+The project uses GitHub Actions for automated builds.
 
-#### macOS (from macOS)
+### Workflow Triggers
+
+1. **Push to branches**: main and init
+2. **Pull requests**: To main branch
+3. **Manual trigger**: Via GitHub Actions UI
+4. **Tags**: When pushing a tag starting with v (e.g., v0.1.0)
+
+### Build Matrix
+
+| Platform | Architecture | Installer | Artifact |
+|----------|--------------|-----------|----------|
+| Windows  | x86_64       | .exe      | windows-installer |
+| macOS    | aarch64      | .dmg      | macos-installer-dmg |
+
+## Artifacts
+
+After a successful workflow run:
+
+1. Go to the **Actions** tab in your GitHub repository
+2. Click on the workflow run
+3. Download installers from **Artifacts** section
+
+## Release Process
+
+To create a GitHub Release:
 
 ```bash
-# Intel Macs
-cargo tauri build --target x86_64-apple-darwin
-
-# Apple Silicon Macs
-cargo tauri build --target aarch64-apple-darwin
-
-# Universal Binary (both architectures)
-cargo tauri build --target universal-apple-darwin
+# Tag your commit
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
-#### Windows (from Windows)
+The pipeline automatically creates a release with installers attached.
 
+## Troubleshooting
+
+### DuckDB Not Found (macOS)
 ```bash
-# 64-bit Windows
-cargo tauri build --target x86_64-pc-windows-msvc
+brew install duckdb
+export RUSTFLAGS="-L /opt/homebrew/lib"
 ```
 
-## Testing the Build
-
-After building, the installer will be in:
-- macOS: `src-tauri/target/release/bundle/dmg/rats_0.1.0_[arch].dmg`
-- Windows: `src-tauri/target/release/bundle/msi/rats_0.1.0_x64_en-US.msi`
-
-Install and test the application to ensure:
-1. CSV/Excel file import works
-2. File dialogs open correctly
-3. Data displays in the grid
-4. Row sorting functions properly
-
-## Distribution
-
-The built installers are self-contained and can be distributed directly to users.
-
-### macOS Notes
-- Users may need to right-click → Open the first time (if not code-signed)
-- For distribution via Mac App Store, additional code signing is required
-
-### Windows Notes
-- Users may see a SmartScreen warning (if not code-signed)
-- For trusted distribution, get a code signing certificate
-
-## Code Signing (Optional but Recommended)
-
-For production distribution, consider:
-- **macOS**: Apple Developer Program ($99/year) for notarization
-- **Windows**: Code signing certificate from trusted CA ($100-400/year)
+### DuckDB Not Found (Windows)
+```powershell
+$env:DUCKDB_LIB_DIR = "C:\duckdb"
+$env:DUCKDB_INCLUDE_DIR = "C:\duckdb"
+```
