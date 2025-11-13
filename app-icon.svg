@@ -1,0 +1,17 @@
+<svg width="512" height="512" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0078d4" rx="64"/>
+
+  <!-- Grid pattern representing spreadsheet -->
+  <g stroke="#ffffff" stroke-width="6" fill="none">
+    <rect x="100" y="100" width="312" height="312"/>
+    <line x1="100" y1="180" x2="412" y2="180"/>
+    <line x1="100" y1="260" x2="412" y2="260"/>
+    <line x1="100" y1="340" x2="412" y2="340"/>
+    <line x1="204" y1="100" x2="204" y2="412"/>
+    <line x1="308" y1="100" x2="308" y2="412"/>
+  </g>
+
+  <!-- Letter R -->
+  <text x="256" y="310" font-family="Arial, sans-serif" font-size="200" font-weight="bold" fill="#ffffff" text-anchor="middle">R</text>
+</svg>
