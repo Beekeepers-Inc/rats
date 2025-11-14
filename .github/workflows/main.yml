@@ -74,18 +74,7 @@ jobs:
 
       - name: Build Tauri app (Windows)
         if: matrix.platform.os == 'windows-latest'
-        shell: powershell
-        run: |
-          # Ensure DuckDB paths are set
-          $env:DUCKDB_LIB_DIR = "$env:GITHUB_WORKSPACE\duckdb"
-          $env:DUCKDB_INCLUDE_DIR = "$env:GITHUB_WORKSPACE\duckdb"
-          $env:PATH = "$env:GITHUB_WORKSPACE\duckdb;$env:PATH"
-
-          Write-Host "Building with:"
-          Write-Host "DUCKDB_LIB_DIR=$env:DUCKDB_LIB_DIR"
-          Write-Host "DUCKDB_INCLUDE_DIR=$env:DUCKDB_INCLUDE_DIR"
-
-          npm run tauri:build
+        run: npm run tauri:build
 
       - name: Build Tauri app (macOS)
         if: matrix.platform.os == 'macos-latest'
