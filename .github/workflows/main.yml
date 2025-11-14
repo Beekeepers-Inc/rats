@@ -66,41 +66,8 @@ jobs:
           brew install duckdb
           echo "RUSTFLAGS=-L /opt/homebrew/lib" >> $GITHUB_ENV
 
-      - name: Install DuckDB (Windows)
-        if: matrix.platform.os == 'windows-latest'
-        shell: powershell
-        run: |
-          # Download and install DuckDB for Windows
-          $duckdbVersion = "1.1.3"
-          $duckdbUrl = "https://github.com/duckdb/duckdb/releases/download/v$duckdbVersion/libduckdb-windows-amd64.zip"
-          $duckdbZip = "$env:TEMP\libduckdb-windows-amd64.zip"
-          $duckdbDir = "$env:GITHUB_WORKSPACE\duckdb"
-
-          Write-Host "Downloading DuckDB from $duckdbUrl"
-          Invoke-WebRequest -Uri $duckdbUrl -OutFile $duckdbZip
-
-          Write-Host "Extracting DuckDB to $duckdbDir"
-          Expand-Archive -Path $duckdbZip -DestinationPath $duckdbDir -Force
-
-          # Set environment variables for the build
-          $libPath = "$duckdbDir"
-          $includePath = "$duckdbDir"
-
-          # Add to GitHub environment
-          echo "DUCKDB_LIB_DIR=$libPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "DUCKDB_INCLUDE_DIR=$includePath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-
-          # Also set for this session
-          $env:DUCKDB_LIB_DIR = $libPath
-          $env:DUCKDB_INCLUDE_DIR = $includePath
-
-          # Add to PATH for runtime
-          $binPath = "$duckdbDir"
-          echo "$binPath" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-          Write-Host "DuckDB installed successfully"
-          Write-Host "DUCKDB_LIB_DIR=$libPath"
-          Write-Host "DUCKDB_INCLUDE_DIR=$includePath"
+      # Windows uses bundled DuckDB (compiled from source) via Cargo.toml feature
+      # No separate installation needed
 
       - name: Install frontend dependencies
         run: npm install
