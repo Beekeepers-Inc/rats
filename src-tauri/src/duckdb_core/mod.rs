@@ -150,6 +150,23 @@ impl DatabaseConnection {
 
         Ok(TableInfo { columns, row_count })
     }
+
+    pub fn cleanup(&self) -> DuckResult<()> {
+        // Get all tables
+        let mut stmt = self.conn.prepare("SHOW TABLES")?;
+        let table_names: Vec<String> = stmt.query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // Drop all tables
+        for table_name in table_names {
+            let _ = self.conn.execute(&format!("DROP TABLE IF EXISTS {}", table_name), []);
+        }
+
+        // Flush any pending operations
+        let _ = self.conn.execute("CHECKPOINT", []);
+
+        Ok(())
+    }
 }
 
 #[tauri::command(rename_all = "camelCase")]
@@ -161,7 +178,7 @@ pub async fn query_data(
 ) -> Result<QueryResult, String> {
     let db = state.db.lock().map_err(|e| e.to_string())?;
 
-    let limit = limit.unwrap_or(1000);
+    let limit = limit.unwrap_or(5000); // Increased default for better virtual scroll performance
     let offset = offset.unwrap_or(0);
 
     let query = format!("SELECT * FROM {} LIMIT {} OFFSET {}", table_name, limit, offset);

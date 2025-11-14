@@ -5,6 +5,7 @@ import { VirtualScroller } from './virtualScroll.js';
 
 // Application state
 let currentTable = null;
+let originalTable = null; // Track the original table name (before filtering)
 let currentData = null;
 let currentColumns = null;
 let selectedFilePath = null;
@@ -396,6 +397,9 @@ async function cleanupPreviousData() {
   currentTbody = null;
   totalRows = 0;
   loadedRowCount = 0;
+  isFiltered = false;
+  filterRules = [];
+  originalTable = null;
 
   // Drop old table from DuckDB if exists
   if (currentTable) {
@@ -439,14 +443,14 @@ async function loadTableData(limit = null) {
     statusText.textContent = `Preparing to display ${totalRows.toLocaleString()} rows...`;
     updateRowCount(totalRows);
 
-    if (virtualScrollEnabled && totalRows > 100) {
-      // Use virtual scrolling for large datasets
+    if (virtualScrollEnabled) {
+      // Always use virtual scrolling when enabled (handles any dataset size, even 100M+ rows)
       console.log(`Using virtual scrolling for ${totalRows} rows`);
       statusText.textContent = `Loading first rows of ${totalRows.toLocaleString()}...`;
       await loadVirtualScrollData();
       statusText.textContent = `Ready - ${totalRows.toLocaleString()} rows (scroll to load more)`;
     } else {
-      // Load all data for small datasets
+      // Load all data for small datasets (only when virtual scroll is disabled)
       console.log(`Loading all ${totalRows} rows`);
       statusText.textContent = `Loading ${totalRows.toLocaleString()} rows...`;
       const result = await invoke('query_data', {
@@ -591,7 +595,7 @@ async function loadVirtualScrollData() {
   virtualScrollContainer = new VirtualScroller({
     container: gridContainer,
     rowHeight: 32,
-    bufferSize: 20,
+    bufferSize: 50, // Increased buffer for smoother scrolling with large datasets
     totalRows: totalRows,
     onRenderRows: async (startIndex, count) => {
       console.log(`Rendering rows ${startIndex} to ${startIndex + count}`);
@@ -1313,6 +1317,11 @@ async function handleApplyFilter() {
     hideModal(filterDialog);
     showLoading('Applying filters...');
 
+    // Store original table if not already stored
+    if (!originalTable) {
+      originalTable = currentTable;
+    }
+
     // Convert filter rules to backend format
     const conditions = filterRules.map(rule => ({
       column: rule.column,
@@ -1320,20 +1329,23 @@ async function handleApplyFilter() {
       value: parseFilterValue(rule.value)
     }));
 
-    const result = await invoke('filter_data', {
-      tableName: currentTable,
-      conditions: conditions,
-      limit: 10000,
-      offset: 0
+    // Create filtered view
+    const filteredViewName = `${originalTable}_filtered`;
+    await invoke('create_filtered_view', {
+      sourceTable: originalTable,
+      viewName: filteredViewName,
+      conditions: conditions
     });
 
-    currentData = result;
-    isFiltered = true; // Mark as filtered
-    resetBtn.disabled = false; // Enable reset button
+    // Switch to filtered view
+    currentTable = filteredViewName;
+    isFiltered = true;
+    resetBtn.disabled = false;
 
-    displayData(result);
-    updateRowCount(result.total_rows);
-    statusText.textContent = `Filtered: ${result.total_rows.toLocaleString()} of ${originalRowCount.toLocaleString()} rows (${filterRules.length} filter(s))`;
+    // Reload data with virtual scrolling
+    await loadTableData();
+
+    statusText.textContent = `Filtered: ${totalRows.toLocaleString()} of ${originalRowCount.toLocaleString()} rows (${filterRules.length} filter(s))`;
 
     hideLoading();
   } catch (error) {
@@ -1371,6 +1383,12 @@ async function handleResetClick() {
     // Clear filter state
     isFiltered = false;
     filterRules = [];
+
+    // Restore original table
+    if (originalTable) {
+      currentTable = originalTable;
+      originalTable = null; // Reset for next filter operation
+    }
 
     // Reload original data
     await loadTableData();
