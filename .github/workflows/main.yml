@@ -15,17 +15,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform:
+        include:
           - os: windows-latest
-            rust_target: x86_64-pc-windows-msvc
             artifact_name: windows-installer
-            artifact_path: src-tauri/target/release/bundle/nsis/*.exe
           - os: macos-latest
-            rust_target: aarch64-apple-darwin
             artifact_name: macos-installer
-            artifact_path: src-tauri/target/release/bundle/dmg/*.dmg
 
-    runs-on: ${{ matrix.platform.os }}
+    runs-on: ${{ matrix.os }}
 
     steps:
       - name: Checkout repository
@@ -35,12 +31,9 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.platform.rust_target }}
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -48,7 +41,7 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Install dependencies (Ubuntu)
-        if: matrix.platform.os == 'ubuntu-latest'
+        if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev \
@@ -61,7 +54,7 @@ jobs:
             librsvg2-dev
 
       - name: Install DuckDB (macOS)
-        if: matrix.platform.os == 'macos-latest'
+        if: matrix.os == 'macos-latest'
         run: |
           brew install duckdb
           echo "RUSTFLAGS=-L /opt/homebrew/lib" >> $GITHUB_ENV
@@ -70,37 +63,32 @@ jobs:
       # No separate installation needed
 
       - name: Install frontend dependencies
-        run: npm install
+        run: npm ci
 
-      - name: Build Tauri app (Windows)
-        if: matrix.platform.os == 'windows-latest'
-        run: npm run tauri:build
-
-      - name: Build Tauri app (macOS)
-        if: matrix.platform.os == 'macos-latest'
+      - name: Build Tauri app
         run: npm run tauri:build
 
       - name: Upload artifacts (Windows)
-        if: matrix.platform.os == 'windows-latest'
+        if: matrix.os == 'windows-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.artifact_name }}
+          name: ${{ matrix.artifact_name }}
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
       - name: Upload artifacts (macOS DMG)
-        if: matrix.platform.os == 'macos-latest'
+        if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.artifact_name }}-dmg
+          name: ${{ matrix.artifact_name }}-dmg
           path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
       - name: Upload artifacts (macOS App)
-        if: matrix.platform.os == 'macos-latest'
+        if: matrix.os == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform.artifact_name }}-app
+          name: ${{ matrix.artifact_name }}-app
           path: src-tauri/target/release/bundle/macos/*.app
           if-no-files-found: warn
 
