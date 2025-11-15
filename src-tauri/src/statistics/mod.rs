@@ -236,7 +236,47 @@ pub async fn calculate_correlation(
     Ok(correlation)
 }
 
-/// Filter data based on conditions
+/// Create a filtered view for virtual scrolling
+#[tauri::command(rename_all = "camelCase")]
+pub async fn create_filtered_view(
+    state: State<'_, AppState>,
+    source_table: String,
+    view_name: String,
+    conditions: Vec<FilterCondition>,
+) -> Result<String, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    let conn = db.get_connection();
+
+    // Drop existing view if it exists
+    let drop_query = format!("DROP VIEW IF EXISTS {}", view_name);
+    conn.execute(&drop_query, [])
+        .map_err(|e| format!("Failed to drop view: {}", e))?;
+
+    // Build WHERE clause
+    let where_clauses: Vec<String> = conditions
+        .iter()
+        .map(|c| build_condition_clause(c))
+        .collect();
+
+    let where_clause = if where_clauses.is_empty() {
+        String::new()
+    } else {
+        format!("WHERE {}", where_clauses.join(" AND "))
+    };
+
+    // Create view
+    let create_query = format!(
+        "CREATE VIEW {} AS SELECT * FROM {} {}",
+        view_name, source_table, where_clause
+    );
+
+    conn.execute(&create_query, [])
+        .map_err(|e| format!("Failed to create filtered view: {}", e))?;
+
+    Ok(view_name)
+}
+
+/// Filter data based on conditions (legacy - now creates filtered view)
 #[tauri::command(rename_all = "camelCase")]
 pub async fn filter_data(
     state: State<'_, AppState>,

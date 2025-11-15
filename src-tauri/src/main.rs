@@ -14,6 +14,17 @@ fn main() {
             app.manage(state);
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Cleanup resources before window closes
+                if let Some(state) = window.try_state::<AppState>() {
+                    if let Ok(db) = state.db.lock() {
+                        let _ = db.cleanup();
+                        println!("App cleanup completed");
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             // Import
             import::import_file,
@@ -29,6 +40,7 @@ fn main() {
             statistics::aggregate_column,
             statistics::calculate_correlation,
             statistics::filter_data,
+            statistics::create_filtered_view,
             statistics::group_and_aggregate,
             // Export
             export::export_to_csv,
